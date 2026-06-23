@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-from utils.formatters import confidence_dot, fmt_value
+from utils.formatters import compute_sensitivity_row, confidence_dot, extract_go_no_go, fmt_value
 
 # ── Field / metric label maps ────────────────────────────────────────────────
 
@@ -301,6 +301,20 @@ html, body, .stApp,
 }
 .ds-info-value { font-size: 15px; font-weight: 600; color: #0F1B38; }
 .ds-info-sub   { font-size: 12px; color: #64748B; margin-top: 4px; }
+
+/* ── IC Summary Strip ─────────────────────────────────────────────── */
+.ds-ic-strip {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border-radius: 8px; padding: 10px 18px; margin-bottom: 12px;
+}
+.ds-ic-strip-go   { background: #f0fdf4; border: 1px solid #86EFAC; border-left: 4px solid #16A34A; }
+.ds-ic-strip-nogo { background: #fef2f2; border: 1px solid #FCA5A5; border-left: 4px solid #DC2626; }
+.ds-ic-strip-need { background: #fefce8; border: 1px solid #FDE68A; border-left: 4px solid #D97706; }
+.ds-ic-label   { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #94A3B8; }
+.ds-ic-rec     { font-size: 14px; font-weight: 800; }
+.ds-ic-score   { font-size: 12px; font-weight: 500; color: #0F1B38; }
+.ds-ic-flag    { font-size: 12px; color: #475569; }
+.ds-ic-divider { color: #CBD5E1; font-size: 14px; }
 </style>
 """
 
@@ -632,3 +646,233 @@ def render_market_research(market: dict) -> None:
         st.caption(f"Rent trend rationale: {trend['reason']}")
     if market.get("footer"):
         st.caption(f"_{market['footer']}_")
+
+
+# ── IC Summary Strip ──────────────────────────────────────────────────────────
+
+def render_ic_summary_strip(uw_live: dict, risk: dict, report: dict) -> None:
+    """Compact one-line IC-ready banner: Recommendation · Deal Score · Top Flag."""
+    ds    = uw_live.get("deal_score", {})
+    score = ds.get("score")
+    label = ds.get("label", "Weak")  # Strong | Borderline | Weak
+
+    # Derive recommendation from IC Memo when available, else from score/flags
+    memo_md = (report or {}).get("memo_markdown") or ""
+    writer_ok = memo_md and not (report or {}).get("writer_error")
+    if writer_ok:
+        raw = extract_go_no_go(memo_md)
+        recommendation = {"Go": "GO", "No-Go": "NO-GO", "Conditional Go": "NEED INFO"}.get(
+            raw, "NEED INFO"
+        )
+    else:
+        flags = (risk or {}).get("flags", [])
+        has_critical = any(f.get("severity") == "critical" and f.get("triggered") for f in flags)
+        if has_critical or label == "Weak":
+            recommendation = "NO-GO"
+        elif label == "Strong":
+            recommendation = "GO"
+        else:
+            recommendation = "NEED INFO"
+
+    # Highest-severity triggered flag
+    flags     = (risk or {}).get("flags", [])
+    triggered = [f for f in flags if f.get("triggered")]
+    _sev_rank = {"critical": 0, "warning": 1, "info": 2}
+    top_flag  = min(triggered, key=lambda f: _sev_rank.get(f.get("severity", "info"), 2), default=None)
+
+    strip_cls = {"GO": "ds-ic-strip-go", "NO-GO": "ds-ic-strip-nogo"}.get(
+        recommendation, "ds-ic-strip-need"
+    )
+    rec_color = {"GO": "#15803D", "NO-GO": "#B91C1C"}.get(recommendation, "#B45309")
+    score_str = f"{score:.0f} / 100" if score is not None else "—"
+
+    flag_html = ""
+    if top_flag:
+        sev   = top_flag.get("severity", "info")
+        icons = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}
+        flag_html = (
+            f'<span class="ds-ic-divider">|</span>'
+            f'<span class="ds-ic-flag">{icons.get(sev, "ℹ️")} '
+            f'{sev.capitalize()}: {top_flag.get("flag_name", "")}</span>'
+        )
+
+    st.markdown(
+        f"""<div class="ds-ic-strip {strip_cls}">
+          <span class="ds-ic-label">Recommendation</span>
+          <span class="ds-ic-rec" style="color:{rec_color};">{recommendation}</span>
+          <span class="ds-ic-divider">|</span>
+          <span class="ds-ic-score">Deal Score: <strong>{score_str}</strong></span>
+          {flag_html}
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+# ── Sensitivity Analysis Table ────────────────────────────────────────────────
+
+def render_sensitivity_table(extracted: dict, assumptions: dict) -> None:
+    """DSCR × Cap Rate sensitivity table across Base / Downside / Upside scenarios."""
+    if not extracted:
+        return
+
+    def _get(field):
+        e = extracted.get(field, {})
+        return e.get("value") if isinstance(e, dict) else None
+
+    asking_price = _get("asking_price")
+    noi_proforma = _get("noi_proforma")
+    ltv      = assumptions.get("ltv", 0.70)
+    rate     = assumptions.get("rate", 0.065)
+    am_years = assumptions.get("amortization_years", 30)
+
+    st.divider()
+    st.markdown("#### Sensitivity Analysis")
+
+    if asking_price is None or noi_proforma is None:
+        st.info(
+            "Sensitivity requires proforma NOI. "
+            "Ensure the OM includes proforma financials for this section to populate."
+        )
+        return
+
+    scenarios = [
+        ("Base Case", ltv,         rate,         noi_proforma),
+        ("Downside",  ltv + 0.05,  rate + 0.005, noi_proforma * 0.90),
+        ("Upside",    ltv - 0.05,  rate - 0.005, noi_proforma * 1.10),
+    ]
+
+    rows = []
+    for name, s_ltv, s_rate, s_noi in scenarios:
+        dscr, cap = compute_sensitivity_row(asking_price, s_noi, s_ltv, s_rate, am_years)
+        rows.append({
+            "Scenario":  name,
+            "LTV":       f"{s_ltv * 100:.0f}%",
+            "Int. Rate": f"{s_rate * 100:.1f}%",
+            "NOI":       f"${s_noi:,.0f}",
+            "DSCR":      f"{dscr:.2f}x" if dscr is not None else "N/A",
+            "Cap Rate":  f"{cap:.2f}%"   if cap  is not None else "N/A",
+        })
+
+    df = pd.DataFrame(rows)
+
+    def _row_style(row):
+        bg = {"Upside": "#f0fdf4", "Downside": "#fef2f2"}.get(df.loc[row.name, "Scenario"], "#EFF3F8")
+        return [f"background-color:{bg}"] * len(row)
+
+    st.dataframe(df.style.apply(_row_style, axis=1), use_container_width=True, hide_index=True)
+    st.caption(
+        "Downside: LTV +5%, rate +0.5%, NOI ×0.90 · "
+        "Upside: LTV −5%, rate −0.5%, NOI ×1.10 · "
+        "Base Case uses current sidebar assumptions."
+    )
+
+
+# ── Pipeline Reliability (Settings page) ─────────────────────────────────────
+
+def render_pipeline_reliability() -> None:
+    """Session runtime metrics and hallucination guardrail summary for the Settings page."""
+    run_history = st.session_state.get("run_history", [])
+
+    # ── Section header ─────────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        """<div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.08em;color:#94A3B8;margin-bottom:12px;">
+          Pipeline Reliability
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    # ── A) Runtime Metrics ─────────────────────────────────────────────────────
+    total     = len(run_history)
+    complete  = sum(1 for r in run_history if r.get("status") == "complete")
+    incomplete = total - complete
+    durations = [r["duration_s"] for r in run_history if r.get("duration_s") is not None]
+    avg_dur   = sum(durations) / len(durations) if durations else None
+    avg_str   = f"{avg_dur:.0f}s" if avg_dur is not None else "—"
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(
+            f"""<div class="ds-info-card">
+              <div class="ds-info-label">Deals Screened (Session)</div>
+              <div class="ds-info-value">{total}</div>
+              <div class="ds-info-sub">Total pipeline runs this session</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f"""<div class="ds-info-card">
+              <div class="ds-info-label">Avg Pipeline Duration</div>
+              <div class="ds-info-value">{avg_str}</div>
+              <div class="ds-info-sub">Parser → Report Writer end-to-end</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            f"""<div class="ds-info-card">
+              <div class="ds-info-label">Data Completeness</div>
+              <div class="ds-info-value">{complete} complete · {incomplete} incomplete</div>
+              <div class="ds-info-sub">Critical fields: Asking Price + T-12 NOI</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    if run_history:
+        rows = []
+        for r in run_history[-10:]:
+            ts  = (r.get("timestamp") or "")[:19].replace("T", " ")
+            dur = f"{r['duration_s']:.0f}s" if r.get("duration_s") is not None else "—"
+            sc  = f"{r['score']:.0f} / 100" if r.get("score") is not None else "—"
+            rows.append({
+                "Timestamp": ts,
+                "Deal":      r.get("deal_name", "Unknown"),
+                "Score":     sc,
+                "Duration":  dur,
+                "Status":    "✅ Complete" if r.get("status") == "complete" else "⚠️ Missing Critical Fields",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No deals screened this session. Upload an OM on the Screen Deal page to begin.")
+
+    # ── B) Hallucination Guardrail Summary ────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        """<div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.08em;color:#94A3B8;margin-bottom:12px;">
+          Hallucination Guardrails
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    _badge = (
+        "font-size:12px;font-weight:700;padding:2px 10px;border-radius:12px;"
+        "white-space:nowrap;background:#FEF3C7;color:#B45309;"
+    )
+    _row_sep = "display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid #EEF2F7;"
+    _row_last = "display:flex;align-items:flex-start;gap:12px;padding:10px 0;"
+    _body = "font-size:13px;color:#475569;line-height:1.6;"
+    st.markdown(
+        f"""<div class="ds-info-card">
+          <div class="ds-info-label">What the Agent Does When Data Is Missing</div>
+          <div style="margin-top:10px;">
+            <div style="{_row_sep}">
+              <span style="{_badge}">T-12 NOI Missing</span>
+              <span style="{_body}">DSCR is not calculated. Displayed as "—" in all metric tables.
+              The IC Memo notes that T-12 NOI was unavailable and omits DSCR from the underwriting summary.</span>
+            </div>
+            <div style="{_row_sep}">
+              <span style="{_badge}">Year Built Missing</span>
+              <span style="{_body}">CapEx risk is flagged as unknown. The Risk Flagger raises a warning
+              flag for potential deferred maintenance exposure since asset age cannot be assessed.</span>
+            </div>
+            <div style="{_row_last}">
+              <span style="{_badge}">Occupancy Missing</span>
+              <span style="{_body}">A stabilization risk flag is raised. Underwriting proceeds with
+              available NOI data, but occupancy-dependent metrics are marked unavailable in the output.</span>
+            </div>
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )

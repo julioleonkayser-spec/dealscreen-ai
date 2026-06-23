@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,10 +18,12 @@ from utils.components import (
     page_header,
     render_deal_score_card,
     render_extraction,
+    render_ic_summary_strip,
     render_kpi_row,
     render_market_research,
     render_pipeline_bar,
     render_risk_flags,
+    render_sensitivity_table,
     render_underwriter,
 )
 from utils.formatters import extract_go_no_go
@@ -127,7 +130,9 @@ else:
             render_pipeline_bar(stage_states)
 
     with st.status("Analyzing deal…", expanded=True) as status_box:
+        _t0 = time.time()
         results = run_pipeline(file_bytes, api_key, on_step=on_step)
+        st.session_state["_last_pipeline_duration"] = round(time.time() - _t0, 1)
 
         # Finalise each stage that was visited
         for stage in PIPELINE_STAGES:
@@ -160,9 +165,27 @@ if results.get("parse_error"):
 extracted = results.get("extracted")
 uw_live   = underwrite(extracted, assumptions=assumptions) if extracted else None
 
-# ── Deal score + KPI row ──────────────────────────────────────────────────────
+# ── Run history tracking ──────────────────────────────────────────────────────
+
+if not cached:
+    if "run_history" not in st.session_state:
+        st.session_state["run_history"] = []
+    def _fld(field):
+        e = (extracted or {}).get(field, {})
+        return e.get("value") if isinstance(e, dict) else None
+    _missing_critical = not _fld("asking_price") or not _fld("noi_t12")
+    st.session_state["run_history"].append({
+        "timestamp":  datetime.now(timezone.utc).isoformat(),
+        "deal_name":  _fld("property_name") or uploaded_file.name,
+        "score":      (uw_live or {}).get("deal_score", {}).get("score"),
+        "status":     "missing_critical" if _missing_critical else "complete",
+        "duration_s": st.session_state.pop("_last_pipeline_duration", None),
+    })
+
+# ── IC Summary Strip + Deal score + KPI row ──────────────────────────────────
 
 if uw_live and not uw_live.get("underwriter_error"):
+    render_ic_summary_strip(uw_live, results.get("risk"), results.get("report"))
     render_deal_score_card(uw_live.get("deal_score", {}))
     render_kpi_row(uw_live, extracted)
 
@@ -196,6 +219,7 @@ with tab_financials:
         render_underwriter(uw_live)
     else:
         st.info("Underwriting metrics are unavailable — the extraction step did not complete.")
+    render_sensitivity_table(extracted, assumptions)
 
 with tab_risks:
     st.markdown("#### Risk Assessment")

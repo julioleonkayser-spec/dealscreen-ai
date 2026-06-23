@@ -9,7 +9,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.components import inject_css, page_header
+from utils.components import inject_css, page_header, render_pipeline_reliability
 
 inject_css()
 
@@ -124,6 +124,10 @@ AGENTS = [
 
 df = pd.DataFrame(AGENTS, columns=["Agent", "Model", "Function", "Type"])
 st.dataframe(df, use_container_width=True, hide_index=True)
+
+# ── Pipeline Reliability ──────────────────────────────────────────────────────
+
+render_pipeline_reliability()
 
 # ── Disclaimer ────────────────────────────────────────────────────────────────
 

@@ -52,3 +52,25 @@ def extract_go_no_go(memo_markdown: str) -> str:
     return {"NO-GO": "No-Go", "CONDITIONAL GO": "Conditional Go", "GO": "Go"}.get(
         m.group(1), m.group(1)
     )
+
+
+def compute_sensitivity_row(
+    asking_price: float,
+    noi: float,
+    ltv: float,
+    rate: float,
+    am_years: int,
+):
+    """Return (dscr, cap_rate_pct) for one sensitivity scenario. Returns (None, None) on invalid inputs."""
+    if not asking_price or not noi or not ltv or not rate or not am_years:
+        return None, None
+    loan = asking_price * ltv
+    r = rate / 12
+    n = am_years * 12
+    if r == 0 or n == 0:
+        return None, None
+    monthly = loan * (r * (1 + r) ** n) / ((1 + r) ** n - 1)
+    annual_debt = monthly * 12
+    dscr = noi / annual_debt if annual_debt else None
+    cap_rate = noi / asking_price * 100
+    return dscr, cap_rate
