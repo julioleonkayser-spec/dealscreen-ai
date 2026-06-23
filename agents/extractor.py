@@ -1,5 +1,7 @@
 """Agent 2: Financial Extractor — pulls structured CRE metrics from parsed PDF text."""
 
+from __future__ import annotations
+
 import json
 import os
 import sys
