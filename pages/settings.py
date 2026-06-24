@@ -129,6 +129,71 @@ st.dataframe(df, use_container_width=True, hide_index=True)
 
 render_pipeline_reliability()
 
+# ── Human Review & Limitations (Feature 4) ───────────────────────────────────
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                letter-spacing:.08em;color:#94A3B8;margin-bottom:12px;">
+      Human Review &amp; Limitations
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+_bullet = (
+    "display:flex;align-items:flex-start;gap:10px;"
+    "padding:9px 0;border-bottom:1px solid #EEF2F7;"
+)
+_bullet_last = "display:flex;align-items:flex-start;gap:10px;padding:9px 0;"
+_dot  = (
+    "width:6px;height:6px;border-radius:50%;background:#1B3A6B;"
+    "flex-shrink:0;margin-top:6px;"
+)
+_txt  = "font-size:13px;color:#475569;line-height:1.65;"
+
+st.markdown(
+    f"""<div class="ds-info-card">
+      <div class="ds-info-label" style="margin-bottom:10px;">
+        Analyst review is required before any investment decision.
+      </div>
+      <div style="{_bullet}">
+        <div style="{_dot}"></div>
+        <span style="{_txt}">
+          <strong>Analyst review required</strong> before any investment decision.
+          This tool accelerates first-pass screening — it does not replace professional
+          underwriting judgment.
+        </span>
+      </div>
+      <div style="{_bullet}">
+        <div style="{_dot}"></div>
+        <span style="{_txt}">
+          <strong>Output quality depends on the OM.</strong> Results reflect the quality and
+          completeness of the uploaded Offering Memorandum. Incomplete or poorly formatted
+          OMs will yield partial or lower-confidence extractions.
+        </span>
+      </div>
+      <div style="{_bullet}">
+        <div style="{_dot}"></div>
+        <span style="{_txt}">
+          <strong>Not a replacement for Excel or Argus.</strong> DealScreen AI accelerates
+          the first-pass review and IC memo drafting. A full Excel or Argus model with
+          detailed cash flow projections is required for IC submission.
+        </span>
+      </div>
+      <div style="{_bullet_last}">
+        <div style="{_dot}"></div>
+        <span style="{_txt}">
+          <strong>Market data is user-supplied.</strong> Comps and market benchmarks are
+          based on CSV exports uploaded by the user. Users are responsible for validating
+          comps against CoStar, Crexi, LoopNet, or primary market sources.
+        </span>
+      </div>
+    </div>""",
+    unsafe_allow_html=True,
+)
+
 # ── Disclaimer ────────────────────────────────────────────────────────────────
 
 st.markdown("<br>", unsafe_allow_html=True)

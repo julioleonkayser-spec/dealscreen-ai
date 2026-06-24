@@ -323,6 +323,15 @@ def inject_css() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
+def source_tag(label: str) -> None:
+    """Render a small gray source-attribution caption (e.g. 'Source: OM p.14')."""
+    st.markdown(
+        f'<span style="font-size:11px;color:#94A3B8;font-weight:500;">'
+        f'📄 {label}</span>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── Layout helpers ────────────────────────────────────────────────────────────
 
 def page_header(title: str, subtitle: str = "") -> None:
