@@ -21,11 +21,13 @@ from utils.components import (
     render_deal_score_card,
     render_extraction,
     render_ic_summary_strip,
+    render_irr_multiple_kpi,
     render_kpi_row,
     render_market_research,
     render_pipeline_bar,
     render_risk_flags,
     render_sensitivity_table,
+    render_stress_test,
     render_underwriter,
     source_tag,
 )
@@ -216,6 +218,19 @@ if uw_live and not uw_live.get("underwriter_error"):
     render_deal_score_card(uw_live.get("deal_score", {}))
     render_kpi_row(uw_live, extracted)
 
+    # Feature 3: IRR & Equity Multiple KPI cards
+    if extracted:
+        def _fv(field):
+            e = extracted.get(field, {})
+            return e.get("value") if isinstance(e, dict) else None
+        _price = _fv("asking_price")
+        _noi   = _fv("noi_proforma") or _fv("noi_t12")
+        _cap   = _fv("asking_cap_rate")           # in % (e.g. 5.25)
+        _hold  = assumptions.get("hold_period_years", 5)
+        if _price and _noi:
+            _exit_cap = (_cap / 100) if _cap else (_noi / _price)
+            render_irr_multiple_kpi(_price, _noi, _exit_cap, _hold)
+
 # ── Tabbed results ────────────────────────────────────────────────────────────
 
 tab_overview, tab_financials, tab_risks, tab_market, tab_memo, tab_comps = st.tabs([
@@ -282,9 +297,34 @@ with tab_financials:
                     _fin_parts.append(f"**{_name}** p.{_entry['source_page']}")
             if _fin_parts:
                 source_tag("OM page references — " + " · ".join(_fin_parts))
+
+        # Feature 2: market cap rate benchmark comparison
+        _market_avg_cap = st.session_state.get("market_avg_cap_rate")
+        _deal_cap       = uw_live.get("metrics", {}).get("cap_rate_inplace", {}).get("value")
+        if _deal_cap is not None:
+            if _market_avg_cap is not None:
+                _diff = _deal_cap - _market_avg_cap
+                if _diff > 0:
+                    _tag_color, _tag_bg, _verdict = "#16A34A", "#DCFCE7", "Above market yield"
+                else:
+                    _tag_color, _tag_bg, _verdict = "#B45309", "#FEF3C7", "Below market yield"
+                st.markdown(
+                    f'<div style="font-size:13px;color:#475569;margin:6px 0 12px;">'
+                    f'Deal cap rate: <strong>{_deal_cap:.2f}%</strong> vs '
+                    f'market average: <strong>{_market_avg_cap:.2f}%</strong>'
+                    f'&ensp;<span style="font-size:11px;font-weight:700;padding:2px 8px;'
+                    f'border-radius:12px;background:{_tag_bg};color:{_tag_color};">'
+                    f'{_verdict}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption(
+                    "Market benchmark: N/A — upload a comps CSV in the Market Data & Comps tab."
+                )
     else:
         st.info("Underwriting metrics are unavailable — the extraction step did not complete.")
     render_sensitivity_table(extracted, assumptions)
+    render_stress_test(extracted, assumptions)
 
 # ── Tab: Risks ────────────────────────────────────────────────────────────────
 
@@ -433,6 +473,12 @@ with tab_comps:
             avg_cap  = _avg_col(df_comps, ["cap rate", "cap_rate", "caprate", "cap"])
             avg_rent = _avg_col(df_comps, ["avg rent", "avg_rent", "rent", "monthly rent", "asking rent"])
             avg_ppu  = _avg_col(df_comps, ["price/unit", "price per unit", "price_per_unit", "ppu", "$/unit"])
+
+            # Feature 2: persist numeric market avg cap rate for Financials tab benchmark comparison
+            if avg_cap != "N/A":
+                st.session_state["market_avg_cap_rate"] = float(avg_cap)
+            else:
+                st.session_state.pop("market_avg_cap_rate", None)
 
             m1, m2, m3 = st.columns(3)
             m1.metric("Avg Cap Rate (%)",     avg_cap  if avg_cap  != "N/A" else "N/A")

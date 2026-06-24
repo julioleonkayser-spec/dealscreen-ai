@@ -776,6 +776,168 @@ def render_sensitivity_table(extracted: dict, assumptions: dict) -> None:
     )
 
 
+# ── Stress Test – Base / Bull / Bear (Feature 1) ─────────────────────────────
+
+def render_stress_test(extracted: dict, assumptions: dict) -> None:
+    """Stress-test table directly below the sensitivity table."""
+    if not extracted:
+        return
+
+    def _get(field):
+        e = extracted.get(field, {})
+        return e.get("value") if isinstance(e, dict) else None
+
+    asking_price = _get("asking_price")
+    noi_base     = _get("noi_t12") or _get("noi_proforma")
+    cap_raw      = _get("asking_cap_rate")   # in % (e.g. 5.25)
+
+    if asking_price is None or noi_base is None:
+        st.info(
+            "Stress test requires Asking Price and T-12 NOI. "
+            "Ensure the OM includes these fields."
+        )
+        return
+
+    ltv      = assumptions.get("ltv", 0.70)
+    rate     = assumptions.get("rate", 0.065)
+    am_years = assumptions.get("amortization_years", 30)
+
+    # Fall back to implied cap rate if not in extracted data
+    cap_base = cap_raw if cap_raw is not None else (noi_base / asking_price * 100)
+
+    # Base: current assumptions · Bull: NOI +5%, exit cap −25 bps · Bear: NOI −10%, exit cap +75 bps
+    scenario_defs = [
+        ("Base", noi_base,         cap_base),
+        ("Bull", noi_base * 1.05,  cap_base - 0.25),
+        ("Bear", noi_base * 0.90,  cap_base + 0.75),
+    ]
+
+    scenario_vals = []
+    for name, s_noi, s_cap_pct in scenario_defs:
+        s_cap_pct = max(s_cap_pct, 0.50)          # floor at 50 bps
+        implied   = s_noi / (s_cap_pct / 100)
+        dscr, _   = compute_sensitivity_row(asking_price, s_noi, ltv, rate, am_years)
+        scenario_vals.append((name, s_noi, s_cap_pct, dscr, implied))
+
+    rows = [
+        {
+            "Scenario":      name,
+            "NOI":           f"${s_noi:,.0f}",
+            "Exit Cap Rate": f"{s_cap_pct:.2f}%",
+            "DSCR":          f"{dscr:.2f}x" if dscr is not None else "N/A",
+            "Implied Value": f"${implied:,.0f}",
+        }
+        for name, s_noi, s_cap_pct, dscr, implied in scenario_vals
+    ]
+
+    df = pd.DataFrame(rows)
+
+    def _row_style(row):
+        bg = {"Bull": "#f0fdf4", "Bear": "#fef2f2"}.get(df.loc[row.name, "Scenario"], "#EFF3F8")
+        return [f"background-color:{bg}"] * len(row)
+
+    st.divider()
+    st.markdown("#### Stress Test – Base / Bull / Bear")
+    st.dataframe(df.style.apply(_row_style, axis=1), use_container_width=True, hide_index=True)
+    st.caption(
+        "Base: pipeline assumptions · "
+        "Bull: NOI +5%, exit cap −25 bps · "
+        "Bear: NOI −10%, exit cap +75 bps · "
+        "DSCR recomputed at current sidebar loan assumptions."
+    )
+
+    chart_df = pd.DataFrame(
+        {"Implied Value ($)": [v[4] for v in scenario_vals]},
+        index=[v[0] for v in scenario_vals],
+    )
+    st.bar_chart(chart_df, use_container_width=True)
+
+
+# ── IRR & Equity Multiple (Feature 3) ────────────────────────────────────────
+
+def compute_simple_irr_and_multiple(
+    purchase_price: float,
+    year1_noi: float,
+    noi_growth_rate: float = 0.025,  # 2.5% annual NOI growth (conservative multifamily assumption)
+    exit_cap_rate: float = 0.055,    # exit cap in decimal (e.g. 0.055 = 5.5%)
+    hold_years: int = 5,
+):
+    """Unlevered IRR and equity multiple using a constant-growth model.
+
+    CF_0 = -purchase_price
+    CF_t = NOI_1 × (1+g)^(t-1)  for t = 1 … hold_years-1
+    CF_hold = NOI_hold + NOI_hold / exit_cap_rate  (operating CF + terminal value)
+    """
+    if not purchase_price or not year1_noi or not exit_cap_rate:
+        return None, None
+
+    cfs = [-purchase_price]
+    for t in range(1, hold_years + 1):
+        noi_t = year1_noi * (1 + noi_growth_rate) ** (t - 1)
+        terminal = (noi_t / exit_cap_rate) if t == hold_years else 0.0
+        cfs.append(noi_t + terminal)
+
+    equity_multiple = sum(cfs[1:]) / purchase_price
+
+    def _npv(r: float) -> float:
+        return sum(c / (1 + r) ** t for t, c in enumerate(cfs))
+
+    try:
+        lo, hi = -0.90, 10.0
+        if _npv(lo) * _npv(hi) > 0:
+            return None, equity_multiple
+        for _ in range(200):
+            mid = (lo + hi) / 2
+            if _npv(mid) > 0:
+                lo = mid
+            else:
+                hi = mid
+        irr = (lo + hi) / 2
+    except Exception:
+        irr = None
+
+    return irr, equity_multiple
+
+
+def render_irr_multiple_kpi(
+    purchase_price: float,
+    year1_noi: float,
+    exit_cap_rate: float,
+    hold_years: int = 5,
+) -> None:
+    """Two KPI cards: estimated unlevered IRR and equity multiple."""
+    irr, em = compute_simple_irr_and_multiple(
+        purchase_price, year1_noi, exit_cap_rate=exit_cap_rate, hold_years=hold_years
+    )
+
+    irr_str = f"{irr * 100:.1f}%" if irr is not None else "—"
+    em_str  = f"{em:.2f}x"        if em  is not None else "—"
+
+    irr_css = (
+        "pass" if (irr or 0) >= 0.07 else
+        "warn" if (irr or 0) >= 0.05 else
+        "fail"
+    ) if irr is not None else "missing"
+
+    em_css = (
+        "pass" if (em or 0) >= 1.50 else
+        "warn" if (em or 0) >= 1.20 else
+        "fail"
+    ) if em is not None else "missing"
+
+    irr_card = _kpi_card_html(
+        f"Est. {hold_years}-Yr IRR (Unlevered)", irr_str, "Target ≥ 7%", irr_css
+    )
+    em_card = _kpi_card_html("Est. Equity Multiple", em_str, "Target ≥ 1.5x", em_css)
+
+    st.markdown(
+        f'<div class="ds-kpi-row" style="grid-template-columns:repeat(2,1fr);max-width:560px;">'
+        f'{irr_card}{em_card}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── Pipeline Reliability (Settings page) ─────────────────────────────────────
 
 def render_pipeline_reliability() -> None:
