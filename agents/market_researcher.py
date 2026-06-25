@@ -5,6 +5,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+from typing import List, Optional
 
 SYSTEM_PROMPT = """You are a commercial real estate market analyst with deep expertise in US property markets.
 
@@ -71,7 +72,7 @@ def _web_search_exa(query: str, exa_api_key: str) -> list[str]:
     return bullets
 
 
-def research_market(extracted: dict, api_key=None, use_web_search: bool = False, exa_api_key: str | None = None) -> dict:
+def research_market(extracted: dict, api_key=None, use_web_search: bool = False, exa_api_key: Optional[str] = None) -> dict:
     """
     Generate submarket context for a CRE deal using Claude Sonnet.
 
@@ -108,8 +109,8 @@ def research_market(extracted: dict, api_key=None, use_web_search: bool = False,
     cap_rate_str = f"{asking_cap_rate:.2f}%" if asking_cap_rate else "not provided"
 
     # ── Optional: Exa live web search ─────────────────────────────────────────
-    web_search_notes: list[str] | None = None
-    web_search_status: str | None = None
+    web_search_notes: Optional[List[str]] = None
+    web_search_status: Optional[str] = None
     if use_web_search and exa_api_key:
         search_query = (
             f"{asset_class} cap rates rent growth {location} 2024 2025 commercial real estate"

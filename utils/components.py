@@ -1,5 +1,7 @@
 """Shared UI components and global CSS injection for DealScreen AI."""
 
+from typing import Optional
+
 import pandas as pd
 import streamlit as st
 
@@ -442,15 +444,15 @@ def render_kpi_row(uw_live: dict, extracted: dict) -> None:
     ds      = uw_live.get("deal_score", {})
     metrics = uw_live.get("metrics", {})
 
-    # Deal score card
-    score     = ds.get("score")
-    label     = ds.get("label", "Weak")
-    score_str = (
-        f'{score:.0f}<span style="font-size:14px;font-weight:400;color:#94A3B8"> / 100</span>'
-        if score is not None else "—"
-    )
-    score_css = label.lower().replace(" ", "") if label else "weak"
-    score_card = _kpi_card_html("Deal Score", score_str, label, score_css)
+    # Equity Multiple card (Deal Score is already shown in the card above the KPI row)
+    em_m   = uw_live.get("equity_multiple", {})
+    em_val = em_m.get("value") if isinstance(em_m, dict) else em_m
+    em_str = f"{em_val:.2f}x" if em_val is not None else "—"
+    em_st  = (
+        "pass" if (em_val or 0) >= 1.5
+        else ("warn" if (em_val or 0) >= 1.2 else "fail")
+    ) if em_val is not None else "missing"
+    em_card = _kpi_card_html("Equity Multiple", em_str, "≥ 1.5x target", em_st)
 
     # Cap rate card
     cap_m    = metrics.get("cap_rate_inplace", {})
@@ -477,7 +479,7 @@ def render_kpi_row(uw_live: dict, extracted: dict) -> None:
     occ_card = _kpi_card_html("Occupancy", occ_str, "≥ 90% lender min", occ_st)
 
     st.markdown(
-        f'<div class="ds-kpi-row">{score_card}{cap_card}{dscr_card}{occ_card}</div>',
+        f'<div class="ds-kpi-row">{em_card}{cap_card}{dscr_card}{occ_card}</div>',
         unsafe_allow_html=True,
     )
 
@@ -721,7 +723,7 @@ _VERDICT_META = {
 }
 
 
-def render_verdict_card(report: dict | None, pipeline_done: bool = False) -> None:
+def render_verdict_card(report: Optional[dict], pipeline_done: bool = False) -> None:
     """
     Prominent GO / NO-GO / CONDITIONAL GO card above the results tabs.
     Reads verdict from the IC memo; shows a pending state when not yet available.

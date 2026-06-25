@@ -46,11 +46,11 @@ def confidence_dot(conf: int) -> str:
 
 
 def extract_go_no_go(memo_markdown: str) -> str:
-    m = re.search(r"\*\*(NO-GO|CONDITIONAL GO|GO)\*\*", memo_markdown or "")
+    m = re.search(r"\*\*(NO-GO|CONDITIONAL GO|GO)\*\*", memo_markdown or "", re.IGNORECASE)
     if not m:
         return "Unknown"
     return {"NO-GO": "No-Go", "CONDITIONAL GO": "Conditional Go", "GO": "Go"}.get(
-        m.group(1), m.group(1)
+        m.group(1).upper(), m.group(1)
     )
 
 

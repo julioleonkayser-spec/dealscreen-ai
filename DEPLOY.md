@@ -12,7 +12,14 @@ python3 -m streamlit run app.py
 
 The app will be at **http://localhost:8501**
 
-For your API key, copy `.env.example` to `.env` and fill in your key:
+For your API keys, open `.streamlit/secrets.toml` (git-ignored) and replace the placeholders:
+
+```toml
+ANTHROPIC_API_KEY = "sk-ant-your-real-key-here"
+EXA_API_KEY = "your-exa-key-here"   # optional
+```
+
+Alternatively, copy `.env.example` to `.env` and fill in your key — the app checks `os.getenv` before `st.secrets`:
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 ```

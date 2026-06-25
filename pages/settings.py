@@ -17,8 +17,10 @@ page_header("Settings & About", "Application metadata, configuration status, and
 
 # ── Configuration status ──────────────────────────────────────────────────────
 
-api_key = os.getenv("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", "")
-key_ok  = bool(api_key)
+api_key  = os.getenv("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", "")
+key_ok   = bool(api_key)
+exa_key  = os.getenv("EXA_API_KEY", "") or (st.secrets.get("EXA_API_KEY", "") if hasattr(st, "secrets") else "")
+exa_ok   = bool(exa_key)
 
 st.markdown(
     """
@@ -30,7 +32,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 with c1:
     st.markdown(
         f"""<div class="ds-info-card">
@@ -53,6 +55,19 @@ with c2:
             Extractor &amp; Risk Flagger use Haiku.
             Market Researcher uses Sonnet.
             Report Writer uses Opus.
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+with c3:
+    st.markdown(
+        f"""<div class="ds-info-card">
+          <div class="ds-info-label">Live Market Search (Exa)</div>
+          <div class="ds-info-value">{"✅ Enabled" if exa_ok else "⚠️ Disabled"}</div>
+          <div class="ds-info-sub">
+            {"EXA_API_KEY configured — live web search available in the sidebar." if exa_ok
+             else "No EXA_API_KEY found. Market tab uses AI-only analysis. Add EXA_API_KEY to .env or Streamlit Secrets to enable."}
           </div>
         </div>""",
         unsafe_allow_html=True,

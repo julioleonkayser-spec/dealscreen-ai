@@ -172,12 +172,13 @@ else:
     stage_states: dict = {}
     bar_slot = st.empty()
 
-    def on_step(stage: str, msg: str) -> None:
-        stage_states[stage] = "running"
-        with bar_slot:
-            render_pipeline_bar(stage_states)
-
     with st.status("Analyzing deal…", expanded=True) as status_box:
+        def on_step(stage: str, msg: str) -> None:
+            stage_states[stage] = "running"
+            status_box.update(label=msg)
+            with bar_slot:
+                render_pipeline_bar(stage_states)
+
         _t0 = time.time()
         _pipeline_opts = {
             "use_web_search": _web_search_enabled and bool(_exa_key),
@@ -269,7 +270,7 @@ elif _mkt and _mkt.get("web_search_status"):
 
 # ── Feature 3: Guardrail / Human-Review Checklist ────────────────────────────
 
-with st.expander("⚠️ Guardrail Checklist — Analyst review required", expanded=False):
+with st.expander("⚠️ Guardrail Checklist — Analyst review required", expanded=_pipeline_done):
     st.caption(
         "AI output is a first-pass screen, not a final decision. "
         "Complete these checks before presenting to the Investment Committee."
@@ -402,7 +403,7 @@ with tab_market:
     market = results.get("market")
     if market:
         if market.get("web_search_notes"):
-            with st.expander("🔍 Live Web Search Results (used to ground analysis)", expanded=False):
+            with st.expander("🔍 Live Web Search Results (used to ground analysis)", expanded=True):
                 for note in market["web_search_notes"]:
                     st.markdown(note)
                 st.caption("_Source: Exa web search · verify against primary data_")

@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 LTV = 0.70
 ANNUAL_RATE = 0.065
@@ -166,8 +167,8 @@ def underwrite(extracted: dict, assumptions: dict = None) -> dict:
     # (sys.path is only set in __main__ block; the try/except catches ImportError).
     _noi_for_irr = noi_proforma or noi_t12
     _cap_for_irr = _get(extracted, "asking_cap_rate")  # in %, e.g. 5.25
-    _irr_val: float | None = None
-    _em_val:  float | None = None
+    _irr_val: Optional[float] = None
+    _em_val: Optional[float] = None
 
     if asking_price and _noi_for_irr and _cap_for_irr:
         try:
