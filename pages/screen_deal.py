@@ -18,6 +18,7 @@ from utils.components import (
     empty_state,
     inject_css,
     page_header,
+    render_agent_chain,
     render_deal_score_card,
     render_extraction,
     render_ic_summary_strip,
@@ -362,6 +363,9 @@ with tab_memo:
     else:
         memo_md = report["memo_markdown"]
         st.markdown(memo_md)
+
+        # Collapsible agent reasoning chain for judges / reviewers
+        render_agent_chain(results)
 
         # Append to persistent history (skip for example deals)
         if not _in_example and st.session_state.get("history_appended_for") != fhash:

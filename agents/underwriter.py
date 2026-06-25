@@ -125,7 +125,8 @@ def underwrite(extracted: dict, assumptions: dict = None) -> dict:
         return {
             "loan_assumptions": {},
             "metrics": {},
-            "equity_multiple": {"value": None, "status": "missing", "note": "needs_input"},
+            "equity_multiple": {"value": None, "status": "missing", "note": "asking_price required"},
+            "unlevered_irr":   None,
             "deal_score": {"score": 0.0, "label": "Weak", "explanation": "asking_price missing"},
             "underwriter_error": "asking_price is missing or zero — cannot underwrite.",
         }
@@ -160,16 +161,47 @@ def underwrite(extracted: dict, assumptions: dict = None) -> dict:
         "cash_on_cash":      _metric(coc_val,        "(NOI T-12 − Debt Service) / Equity Invested × 100", "cash_on_cash"),
     }
 
-    equity_multiple = {
-        "value":  1.0,
-        "status": "needs_input",
-        "note":   f"Placeholder 1.0x — re-run with exit assumptions after {hold_period}-yr hold.",
-    }
+    # Compute unlevered IRR and Equity Multiple using constant-growth exit model.
+    # Deferred import so standalone `python agents/underwriter.py` still works
+    # (sys.path is only set in __main__ block; the try/except catches ImportError).
+    _noi_for_irr = noi_proforma or noi_t12
+    _cap_for_irr = _get(extracted, "asking_cap_rate")  # in %, e.g. 5.25
+    _irr_val: float | None = None
+    _em_val:  float | None = None
+
+    if asking_price and _noi_for_irr and _cap_for_irr:
+        try:
+            from utils.math import compute_simple_irr_and_multiple
+            _irr_val, _em_val = compute_simple_irr_and_multiple(
+                asking_price,
+                _noi_for_irr,
+                exit_cap_rate=_cap_for_irr / 100,
+                hold_years=hold_period,
+            )
+        except Exception:
+            pass
+
+    if _em_val is not None:
+        equity_multiple = {
+            "value":  _em_val,
+            "status": "computed",
+            "note":   (
+                f"Unlevered {hold_period}-yr hold · "
+                f"exit cap {_cap_for_irr:.2f}% · constant-growth NOI (2.5%/yr)."
+            ),
+        }
+    else:
+        equity_multiple = {
+            "value":  None,
+            "status": "missing",
+            "note":   "asking_cap_rate required to compute terminal value.",
+        }
 
     result = {
         "loan_assumptions": loan_assumptions,
         "metrics":          metrics,
         "equity_multiple":  equity_multiple,
+        "unlevered_irr":    _irr_val,
         "underwriter_error": None,
     }
     result["deal_score"] = compute_deal_score(result)

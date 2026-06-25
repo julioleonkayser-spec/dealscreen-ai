@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.formatters import compute_sensitivity_row, confidence_dot, extract_go_no_go, fmt_value
+from utils.math import compute_simple_irr_and_multiple
 
 # ── Field / metric label maps ────────────────────────────────────────────────
 
@@ -572,14 +573,44 @@ def render_underwriter(uw: dict) -> None:
             "_status":   status,
         })
 
-    em = uw["equity_multiple"]
+    em       = uw.get("equity_multiple", {})
+    em_val   = em.get("value")
+    em_comp  = em.get("status") == "computed"
+    irr_val  = uw.get("unlevered_irr")
+    hold_yrs = uw.get("loan_assumptions", {}).get("hold_period_years", 5)
+
+    # Equity Multiple row
+    if em_val is not None and em_comp:
+        _em_disp   = f"{em_val:.2f}x"
+        _em_status = "pass" if em_val >= 1.50 else "warn" if em_val >= 1.20 else "fail"
+    else:
+        _em_disp   = "—"
+        _em_status = "missing"
+
     rows.append({
-        "Metric":    "Equity Multiple",
-        "Value":     f"{em['value']:.1f}x" if em.get("value") else "—",
-        "Formula":   "Exit Proceeds / Total Equity",
-        "Benchmark": "Needs hold period",
-        "Status":    "⚪ Needs Input",
-        "_status":   "missing",
+        "Metric":    f"Equity Multiple ({hold_yrs}-yr)",
+        "Value":     _em_disp,
+        "Formula":   "Constant-growth NOI · exit at asking cap rate",
+        "Benchmark": "Target ≥ 1.5x",
+        "Status":    STATUS_BADGE.get(_em_status, "⚪ N/A"),
+        "_status":   _em_status,
+    })
+
+    # Unlevered IRR row
+    if irr_val is not None:
+        _irr_disp   = f"{irr_val * 100:.1f}%"
+        _irr_status = "pass" if irr_val >= 0.07 else "warn" if irr_val >= 0.05 else "fail"
+    else:
+        _irr_disp   = "—"
+        _irr_status = "missing"
+
+    rows.append({
+        "Metric":    f"Unlevered IRR ({hold_yrs}-yr)",
+        "Value":     _irr_disp,
+        "Formula":   f"IRR on unlevered cash flows over {hold_yrs}-yr hold",
+        "Benchmark": "Target ≥ 7.0%",
+        "Status":    STATUS_BADGE.get(_irr_status, "⚪ N/A"),
+        "_status":   _irr_status,
     })
 
     df   = pd.DataFrame(rows)
@@ -854,50 +885,7 @@ def render_stress_test(extracted: dict, assumptions: dict) -> None:
 
 
 # ── IRR & Equity Multiple (Feature 3) ────────────────────────────────────────
-
-def compute_simple_irr_and_multiple(
-    purchase_price: float,
-    year1_noi: float,
-    noi_growth_rate: float = 0.025,  # 2.5% annual NOI growth (conservative multifamily assumption)
-    exit_cap_rate: float = 0.055,    # exit cap in decimal (e.g. 0.055 = 5.5%)
-    hold_years: int = 5,
-):
-    """Unlevered IRR and equity multiple using a constant-growth model.
-
-    CF_0 = -purchase_price
-    CF_t = NOI_1 × (1+g)^(t-1)  for t = 1 … hold_years-1
-    CF_hold = NOI_hold + NOI_hold / exit_cap_rate  (operating CF + terminal value)
-    """
-    if not purchase_price or not year1_noi or not exit_cap_rate:
-        return None, None
-
-    cfs = [-purchase_price]
-    for t in range(1, hold_years + 1):
-        noi_t = year1_noi * (1 + noi_growth_rate) ** (t - 1)
-        terminal = (noi_t / exit_cap_rate) if t == hold_years else 0.0
-        cfs.append(noi_t + terminal)
-
-    equity_multiple = sum(cfs[1:]) / purchase_price
-
-    def _npv(r: float) -> float:
-        return sum(c / (1 + r) ** t for t, c in enumerate(cfs))
-
-    try:
-        lo, hi = -0.90, 10.0
-        if _npv(lo) * _npv(hi) > 0:
-            return None, equity_multiple
-        for _ in range(200):
-            mid = (lo + hi) / 2
-            if _npv(mid) > 0:
-                lo = mid
-            else:
-                hi = mid
-        irr = (lo + hi) / 2
-    except Exception:
-        irr = None
-
-    return irr, equity_multiple
-
+# compute_simple_irr_and_multiple is imported from utils.math at the top of this file.
 
 def render_irr_multiple_kpi(
     purchase_price: float,
@@ -1047,3 +1035,136 @@ def render_pipeline_reliability() -> None:
         </div>""",
         unsafe_allow_html=True,
     )
+
+
+# ── Agent Reasoning Chain ─────────────────────────────────────────────────────
+
+def render_agent_chain(results: dict) -> None:
+    """
+    Collapsible trace of what each pipeline agent received and produced.
+    Read-only — no additional LLM calls are made here.
+    """
+    if not results:
+        return
+
+    parsed    = results.get("parsed",    {}) or {}
+    extracted = results.get("extracted", {}) or {}
+    uw        = results.get("underwriter",{}) or {}
+    risk      = results.get("risk",      {}) or {}
+    market    = results.get("market",    {}) or {}
+    report    = results.get("report",    {}) or {}
+
+    pages = parsed.get("page_count")
+
+    # ── 1. Parser ──────────────────────────────────────────────────────────────
+    parser_input  = "PDF upload"
+    parser_output = f"{pages} pages extracted" if pages else "Text extracted (example deal)"
+
+    # ── 2. Extractor ──────────────────────────────────────────────────────────
+    if "extraction_error" in extracted:
+        extractor_input  = f"{pages or '?'} pages of OM text"
+        extractor_output = f"Failed — {str(extracted['extraction_error'])[:60]}"
+    else:
+        fields  = {k: v for k, v in extracted.items() if isinstance(v, dict)}
+        found   = sum(1 for v in fields.values() if v.get("flag") != "missing")
+        total   = len(fields)
+        confs   = [v["confidence"] for v in fields.values() if "confidence" in v]
+        avg_c   = sum(confs) / len(confs) if confs else 0
+        price_e = (extracted.get("asking_price") or {})
+        noi_e   = (extracted.get("noi_t12") or {})
+        _pv     = price_e.get("value") if isinstance(price_e, dict) else None
+        _nv     = noi_e.get("value")   if isinstance(noi_e, dict)   else None
+        nums    = ""
+        if _pv:
+            nums += f" · Price ${_pv / 1e6:.1f}M"
+        if _nv:
+            nums += f", NOI ${_nv / 1e3:.0f}K"
+        extractor_input  = f"{pages or '?'} pages of OM text"
+        extractor_output = f"{found}/{total} fields found · avg {avg_c:.0f}% confidence{nums}"
+
+    # ── 3. Underwriter ────────────────────────────────────────────────────────
+    if uw.get("underwriter_error"):
+        uw_input  = "Extracted metrics + loan assumptions"
+        uw_output = f"Failed — {str(uw['underwriter_error'])[:60]}"
+    else:
+        metrics   = uw.get("metrics", {})
+        dscr_fmt  = metrics.get("dscr",             {}).get("formatted", "—")
+        cap_fmt   = metrics.get("cap_rate_inplace",  {}).get("formatted", "—")
+        score     = uw.get("deal_score", {}).get("score")
+        label     = uw.get("deal_score", {}).get("label", "")
+        em_v      = uw.get("equity_multiple", {}).get("value")
+        irr_v     = uw.get("unlevered_irr")
+        score_str = f"{score:.0f}/100 ({label})" if score is not None else "—"
+        extras    = ""
+        if em_v is not None:
+            extras += f" · EM {em_v:.2f}x"
+        if irr_v is not None:
+            extras += f" · IRR {irr_v * 100:.1f}%"
+        hold_yrs  = uw.get("loan_assumptions", {}).get("hold_period_years", 5)
+        uw_input  = f"Extracted metrics + {hold_yrs}-yr hold assumptions"
+        uw_output = f"DSCR {dscr_fmt} · Cap {cap_fmt} · Score {score_str}{extras}"
+
+    # ── 4. Risk Flagger ───────────────────────────────────────────────────────
+    if risk.get("flagger_error"):
+        risk_input  = "Underwriter output + extracted data"
+        risk_output = f"Failed — {str(risk['flagger_error'])[:60]}"
+    else:
+        tc       = risk.get("triggered_count", 0)
+        cc       = risk.get("critical_count",  0)
+        flags    = risk.get("flags", [])
+        top_name = next(
+            (f["flag_name"] for f in flags
+             if f.get("triggered") and f.get("severity") == "critical"),
+            None,
+        )
+        top_str = f" · Top: {top_name}" if top_name else ""
+        risk_input  = "Underwriter output + extracted data"
+        risk_output = f"{tc} flag(s) triggered · {cc} critical{top_str}"
+
+    # ── 5. Market Researcher ──────────────────────────────────────────────────
+    if market.get("researcher_error"):
+        mkt_input  = "Location, asset class, cap rate"
+        mkt_output = f"Failed — {str(market['researcher_error'])[:60]}"
+    else:
+        loc_e  = extracted.get("location", {})
+        loc    = loc_e.get("value", "—") if isinstance(loc_e, dict) else "—"
+        pos    = (market.get("deal_positioning") or "—").title()
+        trend  = (market.get("rent_growth_trend") or {}).get("direction") or "—"
+        d_icon = {"positive": "📈", "flat": "➡️", "negative": "📉"}.get(trend, "")
+        mkt_input  = f"{loc} · asset class · asking cap rate"
+        mkt_output = f"{pos} cap rate · {d_icon} {trend.capitalize()} rent trend"
+
+    # ── 6. Report Writer ──────────────────────────────────────────────────────
+    if report.get("writer_error"):
+        rpt_input  = "All prior outputs"
+        rpt_output = f"Failed — {str(report['writer_error'])[:60]}"
+    else:
+        memo_md  = report.get("memo_markdown", "") or ""
+        verdict  = extract_go_no_go(memo_md)
+        go_icon  = {"Go": "✅", "No-Go": "❌", "Conditional Go": "⚠️"}.get(verdict, "❓")
+        rpt_input  = "All prior outputs"
+        rpt_output = f"{go_icon} {verdict} · {len(memo_md):,} char IC Memo"
+
+    chain_rows = [
+        {"#": "1", "Agent": "Parser",          "Model": "pdfplumber",           "Key Input": parser_input,    "Key Output": parser_output},
+        {"#": "2", "Agent": "Extractor",        "Model": "Claude Haiku",         "Key Input": extractor_input, "Key Output": extractor_output},
+        {"#": "3", "Agent": "Underwriter",      "Model": "Python (deterministic)","Key Input": uw_input,       "Key Output": uw_output},
+        {"#": "4", "Agent": "Risk Flagger",     "Model": "Python + Claude Haiku","Key Input": risk_input,      "Key Output": risk_output},
+        {"#": "5", "Agent": "Market Researcher","Model": "Claude Sonnet",        "Key Input": mkt_input,       "Key Output": mkt_output},
+        {"#": "6", "Agent": "Report Writer",    "Model": "Claude Opus",          "Key Input": rpt_input,       "Key Output": rpt_output},
+    ]
+
+    with st.expander("🔍 Agent Reasoning Chain — how the pipeline reached this verdict"):
+        st.caption(
+            "Read-only trace of what each agent received and produced. No additional AI calls are made here."
+        )
+        st.dataframe(
+            pd.DataFrame(chain_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "Underwriter runs entirely in Python (deterministic). "
+            "Risk Flagger uses Python for triggers, then Haiku for context enrichment. "
+            "All numeric values are extracted from the source OM and cited by page number."
+        )
