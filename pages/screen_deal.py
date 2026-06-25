@@ -30,6 +30,7 @@ from utils.components import (
     render_sensitivity_table,
     render_stress_test,
     render_underwriter,
+    render_verdict_card,
     source_tag,
 )
 from utils.formatters import extract_go_no_go
@@ -59,6 +60,22 @@ with st.sidebar:
         "amortization_years": am_years,
         "hold_period_years":  hold_yrs,
     }
+
+    st.divider()
+    st.caption("MARKET RESEARCH OPTIONS")
+    _exa_key = st.secrets.get("EXA_API_KEY", "") if hasattr(st, "secrets") else ""
+    _exa_key = _exa_key or os.getenv("EXA_API_KEY", "")
+    _web_search_enabled = st.checkbox(
+        "🔍 Use live web search for market analysis",
+        value=False,
+        key="use_web_search",
+        help=(
+            "Calls Exa search API to fetch recent cap rate and rent-growth data before "
+            "Claude Sonnet runs. Requires EXA_API_KEY in secrets.toml."
+            + ("" if _exa_key else " (EXA_API_KEY not configured — toggle has no effect)")
+        ),
+        disabled=not bool(_exa_key),
+    )
 
     if not api_key:
         st.divider()
@@ -162,7 +179,11 @@ else:
 
     with st.status("Analyzing deal…", expanded=True) as status_box:
         _t0 = time.time()
-        results = run_pipeline(file_bytes, api_key, on_step=on_step)
+        _pipeline_opts = {
+            "use_web_search": _web_search_enabled and bool(_exa_key),
+            "exa_api_key": _exa_key or None,
+        }
+        results = run_pipeline(file_bytes, api_key, on_step=on_step, options=_pipeline_opts)
         st.session_state["_last_pipeline_duration"] = round(time.time() - _t0, 1)
 
         for stage in PIPELINE_STAGES:
@@ -231,6 +252,41 @@ if uw_live and not uw_live.get("underwriter_error"):
         if _price and _noi:
             _exit_cap = (_cap / 100) if _cap else (_noi / _price)
             render_irr_multiple_kpi(_price, _noi, _exit_cap, _hold)
+
+# ── Feature 2: Prominent Verdict Card ────────────────────────────────────────
+
+_pipeline_done = bool(results.get("report"))
+render_verdict_card(results.get("report"), pipeline_done=_pipeline_done)
+
+# Show live-search status note when search was attempted
+_mkt = results.get("market", {})
+if _mkt and _mkt.get("web_search_notes"):
+    st.caption(
+        f"🔍 Live web search grounded this analysis with {len(_mkt['web_search_notes'])} result(s)."
+    )
+elif _mkt and _mkt.get("web_search_status"):
+    st.caption(f"ℹ️ {_mkt['web_search_status']}")
+
+# ── Feature 3: Guardrail / Human-Review Checklist ────────────────────────────
+
+with st.expander("⚠️ Guardrail Checklist — Analyst review required", expanded=False):
+    st.caption(
+        "AI output is a first-pass screen, not a final decision. "
+        "Complete these checks before presenting to the Investment Committee."
+    )
+    _gc = st.session_state.setdefault("guardrail_checks", {})
+    _checks = [
+        ("verify_metrics",   "Verify key metrics (NOI, occupancy, DSCR) against the original OM / T-12 financials."),
+        ("confirm_rent_roll","Confirm rent roll and tenant data with the property manager or broker."),
+        ("cross_check_comps","Cross-check market assumptions with CoStar / Crexi or broker-provided comps."),
+        ("run_full_model",   "Run a full Excel / Argus model before the IC decision."),
+        ("discuss_flags",    "Discuss major risk flags and open questions in the IC meeting."),
+        ("source_verify",    "Verify AI-extracted figures against source pages cited in the Overview tab."),
+    ]
+    for _key, _label in _checks:
+        _gc[_key] = st.checkbox(_label, value=_gc.get(_key, False), key=f"gc_{_key}")
+    _done = sum(1 for v in _gc.values() if v)
+    st.progress(_done / len(_checks), text=f"{_done} of {len(_checks)} checks completed")
 
 # ── Tabbed results ────────────────────────────────────────────────────────────
 
@@ -345,6 +401,13 @@ with tab_market:
     st.markdown("#### Market Context")
     market = results.get("market")
     if market:
+        if market.get("web_search_notes"):
+            with st.expander("🔍 Live Web Search Results (used to ground analysis)", expanded=False):
+                for note in market["web_search_notes"]:
+                    st.markdown(note)
+                st.caption("_Source: Exa web search · verify against primary data_")
+        elif market.get("web_search_status"):
+            st.caption(f"ℹ️ {market['web_search_status']}")
         render_market_research(market)
     else:
         st.info("Market research not yet available.")

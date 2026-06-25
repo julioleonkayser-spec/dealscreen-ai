@@ -303,6 +303,29 @@ html, body, .stApp,
 .ds-info-value { font-size: 15px; font-weight: 600; color: #0F1B38; }
 .ds-info-sub   { font-size: 12px; color: #64748B; margin-top: 4px; }
 
+/* ── Verdict card ─────────────────────────────────────────────────── */
+.ds-verdict-wrap {
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  border-radius: 12px; padding: 20px 28px; margin: 16px 0;
+  border: 2px solid transparent;
+}
+.ds-verdict-go   { background: #f0fdf4; border-color: #86EFAC; }
+.ds-verdict-nogo { background: #fef2f2; border-color: #FCA5A5; }
+.ds-verdict-cond { background: #fefce8; border-color: #FDE68A; }
+.ds-verdict-pend { background: #f8fafc; border-color: #E2E8F0; }
+.ds-verdict-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: #94A3B8; margin-bottom: 4px;
+}
+.ds-verdict-value {
+  font-size: 28px; font-weight: 900; letter-spacing: -0.02em; line-height: 1;
+}
+.ds-verdict-go   .ds-verdict-value { color: #15803D; }
+.ds-verdict-nogo .ds-verdict-value { color: #B91C1C; }
+.ds-verdict-cond .ds-verdict-value { color: #B45309; }
+.ds-verdict-pend .ds-verdict-value { color: #94A3B8; }
+.ds-verdict-sub  { font-size: 12px; color: #64748B; margin-top: 4px; }
+
 /* ── IC Summary Strip ─────────────────────────────────────────────── */
 .ds-ic-strip {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
@@ -686,6 +709,40 @@ def render_market_research(market: dict) -> None:
         st.caption(f"Rent trend rationale: {trend['reason']}")
     if market.get("footer"):
         st.caption(f"_{market['footer']}_")
+
+
+# ── Verdict Card (Feature 2) ──────────────────────────────────────────────────
+
+_VERDICT_META = {
+    "Go":             ("GO",              "go",   "✅", "Investment Committee: Proceed to full due diligence"),
+    "No-Go":          ("NO-GO",           "nogo", "❌", "Investment Committee: Do not pursue this deal"),
+    "Conditional Go": ("CONDITIONAL GO",  "cond", "⚠️", "Investment Committee: Proceed with conditions — verify key assumptions"),
+    "Unknown":        ("PENDING",         "pend", "⏳", "Pipeline not yet complete or verdict not found in memo"),
+}
+
+
+def render_verdict_card(report: dict | None, pipeline_done: bool = False) -> None:
+    """
+    Prominent GO / NO-GO / CONDITIONAL GO card above the results tabs.
+    Reads verdict from the IC memo; shows a pending state when not yet available.
+    """
+    if not pipeline_done or not report or report.get("writer_error"):
+        label, css, icon, sub = "PENDING", "pend", "⏳", "Run the pipeline to generate a verdict"
+    else:
+        raw = extract_go_no_go(report.get("memo_markdown") or "")
+        label, css, icon, sub = _VERDICT_META.get(raw, _VERDICT_META["Unknown"])
+
+    st.markdown(
+        f"""<div class="ds-verdict-wrap ds-verdict-{css}">
+          <div style="font-size:36px;line-height:1;">{icon}</div>
+          <div>
+            <div class="ds-verdict-label">Investment Committee Recommendation</div>
+            <div class="ds-verdict-value">{label}</div>
+            <div class="ds-verdict-sub">{sub}</div>
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
 
 # ── IC Summary Strip ──────────────────────────────────────────────────────────

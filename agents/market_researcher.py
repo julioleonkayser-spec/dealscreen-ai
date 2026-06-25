@@ -3,6 +3,8 @@
 import json
 import os
 import sys
+import urllib.request
+import urllib.error
 
 SYSTEM_PROMPT = """You are a commercial real estate market analyst with deep expertise in US property markets.
 
@@ -33,9 +35,51 @@ Deal inputs:
 - Asking cap rate: {asking_cap_rate}"""
 
 
-def research_market(extracted: dict, api_key=None) -> dict:
+def _web_search_exa(query: str, exa_api_key: str) -> list[str]:
+    """
+    Call the Exa search API and return 2–3 short bullet strings summarising results.
+    Raises on HTTP/network error so the caller can catch and fall back gracefully.
+    """
+    url = "https://api.exa.ai/search"
+    payload = json.dumps({
+        "query": query,
+        "numResults": 3,
+        "useAutoprompt": True,
+        "contents": {"text": {"maxCharacters": 350}},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "x-api-key": exa_api_key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    bullets: list[str] = []
+    for result in (data.get("results") or [])[:3]:
+        text = (
+            (result.get("text") or "").strip()
+            or (result.get("highlights") or [""])[0].strip()
+            or (result.get("title") or "").strip()
+        )
+        if text:
+            bullets.append(f"• {text[:300]}")
+    return bullets
+
+
+def research_market(extracted: dict, api_key=None, use_web_search: bool = False, exa_api_key: str | None = None) -> dict:
     """
     Generate submarket context for a CRE deal using Claude Sonnet.
+
+    Args:
+        extracted:       Output from the Extractor agent.
+        api_key:         Anthropic API key.
+        use_web_search:  When True, call Exa search for live market notes before Sonnet.
+        exa_api_key:     Exa API key (required when use_web_search=True).
 
     Returns:
         {
@@ -45,6 +89,7 @@ def research_market(extracted: dict, api_key=None) -> dict:
             "deal_positioning": str,
             "footer": "AI-synthesized — verify with CoStar/Crexi",
             "researcher_error": None | str,
+            "web_search_notes": list[str] | None,
         }
     """
     key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -62,16 +107,40 @@ def research_market(extracted: dict, api_key=None) -> dict:
     asking_cap_rate = get("asking_cap_rate")
     cap_rate_str = f"{asking_cap_rate:.2f}%" if asking_cap_rate else "not provided"
 
+    # ── Optional: Exa live web search ─────────────────────────────────────────
+    web_search_notes: list[str] | None = None
+    web_search_status: str | None = None
+    if use_web_search and exa_api_key:
+        search_query = (
+            f"{asset_class} cap rates rent growth {location} 2024 2025 commercial real estate"
+        )
+        try:
+            bullets = _web_search_exa(search_query, exa_api_key)
+            if bullets:
+                web_search_notes = bullets
+        except (urllib.error.URLError, urllib.error.HTTPError, Exception) as exc:
+            web_search_status = f"Live search unavailable: {exc}"
+    elif use_web_search and not exa_api_key:
+        web_search_status = "Live search unavailable: EXA_API_KEY not configured."
+
     try:
         import anthropic
     except ImportError:
         return _error("anthropic package not installed.")
 
+    # Inject live market notes into the prompt when available
+    live_notes_block = ""
+    if web_search_notes:
+        joined = "\n".join(web_search_notes)
+        live_notes_block = (
+            f"\n\nLive market notes (from web search — use these as grounding context):\n{joined}\n"
+        )
+
     user_msg = RESEARCH_PROMPT.format(
         location=location,
         asset_class=asset_class,
         asking_cap_rate=cap_rate_str,
-    )
+    ) + live_notes_block
 
     try:
         client = anthropic.Anthropic(api_key=key)
@@ -95,6 +164,9 @@ def research_market(extracted: dict, api_key=None) -> dict:
         return _error(f"Claude returned invalid JSON: {e}", raw_response=raw)
 
     _enforce_research_schema(result)
+    result["web_search_notes"] = web_search_notes
+    if web_search_status:
+        result["web_search_status"] = web_search_status
     return result
 
 

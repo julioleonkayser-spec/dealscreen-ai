@@ -23,6 +23,7 @@ def run_pipeline(
     file_bytes: bytes,
     api_key: str,
     on_step: Optional[Callable[[str, str], None]] = None,
+    options: Optional[dict] = None,
 ) -> dict:
     """
     Run all 6 agents sequentially.
@@ -66,7 +67,13 @@ def run_pipeline(
     results["risk"] = risk
 
     step("Market Research", "Synthesizing market context with Claude Sonnet…")
-    market = research_market(extracted, api_key=api_key or None)
+    _opts = options or {}
+    market = research_market(
+        extracted,
+        api_key=api_key or None,
+        use_web_search=_opts.get("use_web_search", False),
+        exa_api_key=_opts.get("exa_api_key") or None,
+    )
     results["market"] = market
 
     step("Report Writer", "Writing Investment Committee Memo with Claude Opus…")
